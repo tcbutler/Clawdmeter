@@ -19,6 +19,18 @@ static uint8_t  fade_from = DISPLAY_DEFAULT_BRIGHTNESS;
 static uint8_t  fade_to   = 0;
 static uint8_t  awake_brightness = DISPLAY_DEFAULT_BRIGHTNESS;  // user-set "full" level (brightness.cpp)
 
+// Ambient darkness, pushed in by a board with a light sensor (idle.h).
+static bool     ambient_dark = false;
+static uint32_t dark_since_ms = 0;
+static uint32_t dark_grace_until_ms = 0;   // wake keeps the panel up this long
+
+// Dark long enough to act on, and not inside a post-wake grace period.
+static bool dark_should_sleep(uint32_t now) {
+    if (!ambient_dark) return false;
+    if (now - dark_since_ms < IDLE_DARK_DWELL_MS) return false;
+    return (int32_t)(now - dark_grace_until_ms) >= 0;
+}
+
 static void apply_brightness(uint8_t b) {
     display_hal_set_brightness(b);
 }
@@ -28,12 +40,21 @@ static void begin_fade(uint8_t to, uint32_t now) {
     fade_to   = to;
     fade_started_ms = now;
     fade_last_step_ms = now;
+    // Any fade *in* is a wake (button, touch, or light returning). Arm the
+    // grace period here rather than at the three call sites, so a wake in a
+    // dark room can't fade straight back out.
+    if (to != 0) dark_grace_until_ms = now + IDLE_DARK_WAKE_GRACE_MS;
 }
 
 void idle_init(void) {
     state = STATE_AWAKE;
     last_activity_ms = millis();
     apply_brightness(awake_brightness);
+}
+
+void idle_set_ambient_dark(bool dark) {
+    if (dark && !ambient_dark) dark_since_ms = millis();
+    ambient_dark = dark;
 }
 
 void idle_set_awake_brightness(uint8_t level) {
@@ -78,9 +99,15 @@ bool idle_is_asleep(void) {
 void idle_tick(void) {
     uint32_t now = millis();
 
+    // Darkness overrides the USB keep-awake below: a desk device that is
+    // always on USB would otherwise never sleep, which is exactly the case on
+    // the LDR-equipped board this was written for.
+    const bool dark_sleep = dark_should_sleep(now);
+
     // While on USB power (if configured), don't sleep — and wake from sleep
-    // when power comes back. Treats USB-in as continuous activity.
-    if (!IDLE_SLEEP_WHEN_CHARGING && power_hal_is_vbus_in()) {
+    // when power comes back. Treats USB-in as continuous activity. Light
+    // returning therefore wakes the panel on its own, with no touch needed.
+    if (!IDLE_SLEEP_WHEN_CHARGING && power_hal_is_vbus_in() && !dark_sleep) {
         last_activity_ms = now;
         if (state == STATE_ASLEEP || state == STATE_FADING_OUT) {
             begin_fade(awake_brightness, now);
@@ -90,7 +117,7 @@ void idle_tick(void) {
 
     switch (state) {
     case STATE_AWAKE:
-        if (now - last_activity_ms >= IDLE_TIMEOUT_MS) {
+        if (dark_sleep || now - last_activity_ms >= IDLE_TIMEOUT_MS) {
             begin_fade(0, now);
             state = STATE_FADING_OUT;
         }

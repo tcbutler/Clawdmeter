@@ -98,3 +98,29 @@
 #define BOARD_HAS_IO_EXPANDER      0
 #define BOARD_HAS_SOUND            0   // GPIO 26 drives an amplified speaker, but
                                        // chime.cpp is an ES8311/I2S engine — see sound.cpp
+
+// ---- Ambient light (LDR) ----
+// The CYD carries a photoresistor in a divider on GPIO 34 — input-only, and
+// on ADC1, which (unlike ADC2) keeps working while the radio is up.
+//
+// Polarity is a property of which leg of the divider the LDR sits in, so it's
+// a board fact, not a guess: LDR_DARK_ABOVE says a *higher* reading means
+// darker. Build with -DLDR_DEBUG to log raw samples and retune.
+#define LDR_ADC_PIN          34
+#define LDR_DARK_ABOVE       1        // 1 = higher reading is darker
+// Measured on hardware, not guessed: a lit room reads ~23-44 (about 170 mV)
+// and a finger over the sensor peaks at ~452. The dark end of this divider
+// only reaches the low hundreds, so thresholds live there — an earlier guess
+// of 1200 was simply unreachable and the feature never fired.
+//
+// The threshold sits nearer the lit floor than the covered peak on purpose: a
+// room with the lights off is much dimmer than ambient but nowhere near as
+// dark as a covered sensor, and failing to blank at all is a worse outcome
+// than blanking early (a touch wakes it, and the grace period holds it up).
+// Raise LDR_DARK_LEVEL if it blanks with a lamp still on.
+#define LDR_DARK_LEVEL        120     // enter darkness at/above this
+#define LDR_LIGHT_LEVEL        70     // leave it at/below this (hysteresis)
+#define LDR_SAMPLE_MS        500      // the panel fades over ~0.4 s; no need to rush
+#define LDR_OVERSAMPLE       15       // median-of-N kills ADC outliers (odd number)
+#define LDR_EMA_DIVISOR      4        // smoothing: ~2.5 s time constant at 500 ms
+#define BOARD_HAS_AMBIENT_LIGHT 1
